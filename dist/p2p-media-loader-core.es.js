@@ -3540,7 +3540,7 @@ class WebSocketTracker extends Tracker {
     if (opts.event === "stopped" || opts.event === "completed") {
       this._send(params);
     } else {
-      const numwant = Math.min(opts.numwant, 10);
+      const numwant = Math.min(opts.numwant, 5);
       this._generateOffers(numwant, (offers) => {
         params.numwant = numwant;
         params.offers = offers;
@@ -3840,7 +3840,7 @@ class WebSocketTracker extends Tracker {
     }
   }
 }
-WebSocketTracker.prototype.DEFAULT_ANNOUNCE_INTERVAL = 10 * 1e3;
+WebSocketTracker.prototype.DEFAULT_ANNOUNCE_INTERVAL = 15 * 1e3;
 WebSocketTracker._socketPool = socketPool;
 function noop() {
 }
