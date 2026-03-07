@@ -3266,10 +3266,6 @@
       {
         urls: [
           "stun:stun.l.google.com:19302",
-          "stun:stun1.l.google.com:19302",
-          "stun:stun2.l.google.com:19302",
-          "stun:stun3.l.google.com:19302",
-          "stun:stun4.l.google.com:19302",
           "stun:global.stun.twilio.com:3478"
         ]
       }
@@ -3548,7 +3544,7 @@
       if (opts.event === "stopped" || opts.event === "completed") {
         this._send(params);
       } else {
-        const numwant = Math.min(opts.numwant, 10);
+        const numwant = Math.min(opts.numwant, 5);
         this._generateOffers(numwant, (offers) => {
           params.numwant = numwant;
           params.offers = offers;
@@ -3848,7 +3844,7 @@
       }
     }
   }
-  WebSocketTracker.prototype.DEFAULT_ANNOUNCE_INTERVAL = 10 * 1e3;
+  WebSocketTracker.prototype.DEFAULT_ANNOUNCE_INTERVAL = 15 * 1e3;
   WebSocketTracker._socketPool = socketPool;
   function noop() {
   }
@@ -6811,10 +6807,6 @@ peerId: ${peerId}`
       rtcConfig: {
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-          { urls: "stun:stun2.l.google.com:19302" },
-          { urls: "stun:stun3.l.google.com:19302" },
-          { urls: "stun:stun4.l.google.com:19302" },
           { urls: "stun:global.stun.twilio.com:3478" }
         ]
       },
