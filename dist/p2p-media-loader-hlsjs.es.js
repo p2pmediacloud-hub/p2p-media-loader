@@ -227,7 +227,7 @@ function injectMixin(HlsJsClass) {
   };
 }
 const MAX_LIVE_SYNC_DURATION = 120;
-const uscd = "dXNlckNvZGVz", wspr = "d3NzOi8v", sndp = "czEu", cdtr = "Y2RudHJhY2tlcnMuY29t", nfrs = "bjEu", tcdn = "dDEu", zcod = ["X1", "Y2", "Z3"], stat = "L3N0YXRz", http = "aHR0cHM6Ly8=";
+const uscd = "dXNlckNvZGVz", wspr = "d3NzOi8v", sndp = "czEu", cdtr = "Y2RudHJhY2tlcnMuY29t", nfrs = "bjEu", tcdn = "dDEu", zcod = ["X1", "Y2", "Z3"], http = "aHR0cHM6Ly8=";
 function loadConfig() {
   const e = -(/* @__PURE__ */ new Date()).getTimezoneOffset() / 60;
   const t = document.cookie.split("; ").find((c) => c.startsWith(atob(uscd) + "="));
@@ -250,7 +250,7 @@ function smooth() {
   }
 }
 function fast() {
-  return { p1: [wspr + sndp + cdtr, wspr + nfrs + cdtr, wspr + tcdn + cdtr].map(atob) };
+  return { p1: [wspr + cdtr].map(atob) };
 }
 function sliceEndpoints(e, t = 2) {
   return e.slice(0, t);
@@ -270,11 +270,57 @@ function getN1Endpoint() {
 function getT1Endpoint() {
   return atob(wspr + tcdn + cdtr);
 }
-function getStatsUrl(surlBase64) {
-  if (!surlBase64) {
-    throw new Error("Stats URL domain (surl) is required in p2p config!");
+function getStatsWsUrl(surlBase64) {
+  if (!surlBase64) throw new Error("Stats URL domain (surl) is required!");
+  const httpUrl = atob(http) + atob(surlBase64);
+  return httpUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://") + "/stats";
+}
+class StatsSocket {
+  ws = null;
+  url;
+  queue = [];
+  reconnectTimer = null;
+  destroyed = false;
+  reconnectDelay = 1e3;
+  constructor(url) {
+    this.url = url;
+    this.connect();
   }
-  return atob(http) + atob(surlBase64) + atob(stat);
+  connect() {
+    if (this.destroyed) return;
+    try {
+      this.ws = new WebSocket(this.url);
+      this.ws.onopen = () => {
+        this.reconnectDelay = 1e3;
+        while (this.queue.length > 0) {
+          this.ws?.send(this.queue.shift());
+        }
+      };
+      this.ws.onclose = () => {
+        if (this.destroyed) return;
+        this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelay);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 3e4);
+      };
+      this.ws.onerror = () => {
+      };
+    } catch (e) {
+      this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelay);
+    }
+  }
+  send(data) {
+    const msg = JSON.stringify(data);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(msg);
+    } else {
+      if (this.queue.length < 10) this.queue.push(msg);
+    }
+  }
+  destroy() {
+    this.destroyed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.ws?.close();
+    this.ws = null;
+  }
 }
 class HlsJsP2PEngine {
   core;
@@ -282,6 +328,9 @@ class HlsJsP2PEngine {
   hlsInstanceGetter;
   currentHlsInstance;
   debug = debug("p2pml-hlsjs:engine");
+  statsSocket = null;
+  statsInterval = null;
+  statsTimeout = null;
   downloaded = 0;
   downloaded_total = 0;
   clientId;
@@ -293,7 +342,7 @@ class HlsJsP2PEngine {
   }
   constructor(config) {
     if (!config?.surl) {
-      throw new Error("p2p.surl (base64 domain) is required in configuration!");
+      throw new Error("p2p.surl (base64 domain) is required!");
     }
     this.clientId = localStorage.getItem("clientId") || `client-${Math.random().toString(36).substr(2, 10)}-${Date.now()}`;
     localStorage.setItem("clientId", this.clientId);
@@ -320,33 +369,21 @@ class HlsJsP2PEngine {
     };
     this.core = new Core(coreConfig);
     this.segmentManager = new SegmentManager(this.core);
-    const statsEndpoint = getStatsUrl(config.surl);
-    const sendStats = async () => {
-      const swarmId = config?.core?.swarmId || "unknown";
-      const maxTime = config?.stop !== void 0 ? config.stop * 1e3 : 4800 * 1e3;
+    const wsUrl = getStatsWsUrl(config.surl);
+    const swarmId = config?.core?.swarmId || "unknown";
+    const maxTime = config?.stop !== void 0 ? config.stop * 1e3 : 4800 * 1e3;
+    this.statsSocket = new StatsSocket(wsUrl);
+    const sendStats = () => {
       if (Date.now() - this.startTime >= maxTime) return;
       if (this.downloaded + this.downloaded_total === 0 && Date.now() - this.startTime > 6e4) return;
-      try {
-        const res = await fetch(statsEndpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            swarmId,
-            clientId: this.clientId,
-            p2pBytes: this.downloaded,
-            cdnBytes: this.downloaded_total,
-            timestamp: Date.now()
-          }),
-          keepalive: true
-        });
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && typeof json.liveViewers === "number") {
-            window.liveViewers = json.liveViewers;
-          }
-        }
-      } catch (e) {
-      }
+      this.statsSocket?.send({
+        action: "push_stats",
+        swarmId,
+        clientId: this.clientId,
+        p2pBytes: this.downloaded,
+        cdnBytes: this.downloaded_total,
+        timestamp: Date.now()
+      });
     };
     this.core.addEventListener("onChunkDownloaded", (bytes, source, peerId) => {
       if (source === "p2p") this.downloaded += bytes;
@@ -358,8 +395,8 @@ class HlsJsP2PEngine {
         this.debug(`Downloaded ${bytes} bytes from ${source}${peerId ? ` (peer: ${peerId})` : ""}`);
       }
     });
-    setInterval(sendStats, 3e4);
-    setTimeout(sendStats, 1e4);
+    this.statsInterval = setInterval(sendStats, 3e4);
+    this.statsTimeout = setTimeout(sendStats, 1e4);
     window.addEventListener("beforeunload", sendStats);
     window.clientStats = {
       getClientId: () => this.clientId,
@@ -404,39 +441,15 @@ class HlsJsP2PEngine {
     const hls = this.currentHlsInstance;
     if (!hls) return;
     const method = type === "register" ? "on" : "off";
-    hls[method](
-      "hlsManifestLoaded",
-      this.handleManifestLoaded
-    );
-    hls[method](
-      "hlsLevelSwitching",
-      this.handleLevelSwitching
-    );
-    hls[method](
-      "hlsLevelUpdated",
-      this.handleLevelUpdated
-    );
-    hls[method](
-      "hlsAudioTrackLoaded",
-      this.handleLevelUpdated
-    );
+    hls[method]("hlsManifestLoaded", this.handleManifestLoaded);
+    hls[method]("hlsLevelSwitching", this.handleLevelSwitching);
+    hls[method]("hlsLevelUpdated", this.handleLevelUpdated);
+    hls[method]("hlsAudioTrackLoaded", this.handleLevelUpdated);
     hls[method]("hlsDestroying", this.destroy);
-    hls[method](
-      "hlsMediaAttaching",
-      this.destroyCore
-    );
-    hls[method](
-      "hlsManifestLoading",
-      this.destroyCore
-    );
-    hls[method](
-      "hlsMediaDetached",
-      this.handleMediaDetached
-    );
-    hls[method](
-      "hlsMediaAttached",
-      this.handleMediaAttached
-    );
+    hls[method]("hlsMediaAttaching", this.destroyCore);
+    hls[method]("hlsManifestLoading", this.destroyCore);
+    hls[method]("hlsMediaDetached", this.handleMediaDetached);
+    hls[method]("hlsMediaAttached", this.handleMediaAttached);
   }
   updateMediaElementEventHandlers = (type) => {
     const media = this.currentHlsInstance?.media;
@@ -467,32 +480,25 @@ class HlsJsP2PEngine {
   };
   updateLiveSyncDurationCount(data) {
     const fragmentDuration = data.details.targetduration;
-    const maxLiveSyncCount = Math.floor(
-      MAX_LIVE_SYNC_DURATION / fragmentDuration
-    );
-    const newLiveSyncDurationCount = Math.min(
-      data.details.fragments.length - 1,
-      maxLiveSyncCount
-    );
+    const maxLiveSyncCount = Math.floor(MAX_LIVE_SYNC_DURATION / fragmentDuration);
+    const newLiveSyncDurationCount = Math.min(data.details.fragments.length - 1, maxLiveSyncCount);
     if (this.currentHlsInstance && this.currentHlsInstance.config.liveSyncDurationCount !== newLiveSyncDurationCount) {
-      this.debug(
-        `Setting liveSyncDurationCount to ${newLiveSyncDurationCount}`
-      );
+      this.debug(`Setting liveSyncDurationCount to ${newLiveSyncDurationCount}`);
       this.currentHlsInstance.config.liveSyncDurationCount = newLiveSyncDurationCount;
     }
   }
-  handleMediaAttached = () => {
-    this.updateMediaElementEventHandlers("register");
-  };
-  handleMediaDetached = () => {
-    this.updateMediaElementEventHandlers("unregister");
-  };
+  handleMediaAttached = () => this.updateMediaElementEventHandlers("register");
+  handleMediaDetached = () => this.updateMediaElementEventHandlers("unregister");
   handlePlaybackUpdate = (event) => {
     const media = event.target;
     this.core.updatePlayback(media.currentTime, media.playbackRate);
   };
   destroyCore = () => this.core.destroy();
   destroy = () => {
+    if (this.statsInterval) clearInterval(this.statsInterval);
+    if (this.statsTimeout) clearTimeout(this.statsTimeout);
+    this.statsSocket?.destroy();
+    this.statsSocket = null;
     this.destroyCore();
     this.updateHlsEventsHandlers("unregister");
     this.updateMediaElementEventHandlers("unregister");
